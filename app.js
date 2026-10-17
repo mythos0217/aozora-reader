@@ -6,23 +6,17 @@
    ・AIはユーザー自身のAPIキーで各社APIを直接呼ぶ
    ============================================================ */
 
-const REPO = [
-  "https://raw.githubusercontent.com/aozorabunko/aozorabunko/master/",
-  "https://cdn.jsdelivr.net/gh/aozorabunko/aozorabunko@master/",
-];
-const CATALOG_PATH = "index_pages/list_person_all_extended_utf8.zip";
+/* 本文：aozorahack が公開している青空文庫テキストのミラー（GitHub、ブラウザから直接取得可） */
+const MIRROR = "https://raw.githubusercontent.com/aozorahack/aozorabunko_text/master/";
+const MIRROR_API = "https://api.github.com/repos/aozorahack/aozorabunko_text/contents/";
+/* 目録：このリポジトリの GitHub Actions が毎週作る catalog.json */
 const CATALOG_TTL = 7 * 24 * 3600 * 1000;
-
-async function fetchRepo(path) {
-  let last;
-  for (const base of REPO) {
-    try {
-      const r = await fetch(base + path);
-      if (r.ok) return { buf: await r.arrayBuffer(), base };
-      last = new Error("HTTP " + r.status);
-    } catch (e) { last = e; }
-  }
-  throw new Error("青空文庫のデータを取得できませんでした。通信状況を確かめて、もう一度お試しください。" + (last ? `（${last.message}）` : ""));
+function catalogURLs() {
+  const urls = ["catalog.json"];
+  const m = location.hostname.match(/^([^.]+)\.github\.io$/);
+  const repo = location.pathname.split("/").filter(Boolean)[0];
+  if (m && repo) urls.push(`https://raw.githubusercontent.com/${m[1]}/${repo}/main/catalog.json`);
+  return urls;
 }
 
 /* ---------- IndexedDB（小さなキー・値ストア） ---------- */
@@ -124,65 +118,40 @@ const CLASSIC_AUTHORS = ["夏目漱石", "芥川竜之介", "太宰治", "宮沢
 let CAT = [], BY_ID = {}, BY_AUTHOR = {}, KEYS = [];
 let catState = { status: "idle", msg: "" };
 
-function parseCSV(text, onRow) {
-  let row = [], field = "", q = false;
-  for (let i = 0, n = text.length; i < n; i++) {
-    const c = text[i];
-    if (q) {
-      if (c === '"') { if (text[i + 1] === '"') { field += '"'; i++; } else q = false; }
-      else field += c;
-    } else if (c === '"') q = true;
-    else if (c === ",") { row.push(field); field = ""; }
-    else if (c === "\n") { row.push(field); onRow(row); row = []; field = ""; }
-    else if (c !== "\r") field += c;
-  }
-  if (field || row.length) { row.push(field); onRow(row); }
-}
-function parseCatalog(text) {
-  if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1);
-  let H = null; const seen = new Set(), out = [];
-  parseCSV(text, r => {
-    if (!H) { H = {}; r.forEach((h, i) => H[h.trim()] = i); return; }
-    const c = (...names) => { for (const n of names) if (H[n] !== undefined && r[H[n]] !== undefined) return r[H[n]]; return ""; };
-    const role = c("役割フラグ");
-    if (role && role !== "著者") return;
-    const id = c("作品ID"); if (!id || seen.has(id)) return;
-    const html = c("XHTML/HTMLファイルURL");
-    if (!/aozora\.gr\.jp\/cards\//.test(html)) return;
-    seen.add(id);
-    out.push({
-      id, t: c("作品名"), ty: c("作品名読み"), st: c("副題"),
-      aid: c("人物ID"), a: c("姓") + c("名"), ay: c("姓読み") + c("名読み"),
-      ndc: ndcCode(c("分類番号")), kana: c("文字遣い種別"), first: c("初出"), pub: c("公開日"),
-      card: c("図書カードURL"), html: html.replace(/^https?:\/\/www\.aozora\.gr\.jp\//, ""),
-    });
-  });
-  return out;
-}
 function applyCatalog(list) {
   CAT = list; BY_ID = {}; BY_AUTHOR = {};
   for (const w of list) { BY_ID[w.id] = w; (BY_AUTHOR[w.aid] ||= []).push(w); }
   KEYS = list.map(w => [norm(w.t), norm(w.ty), norm(w.a), norm(w.ay)]);
 }
+async function fetchCatalog() {
+  let last;
+  for (const u of catalogURLs()) {
+    try {
+      const r = await fetch(u, { cache: "no-cache" });
+      if (!r.ok) { last = new Error("HTTP " + r.status); continue; }
+      const j = await r.json();
+      if (!j.rows || j.rows.length < 100) { last = new Error("目録の中身が空です"); continue; }
+      const works = j.rows.map(row => Object.fromEntries(j.cols.map((c, i) => [c, row[i] ?? ""])));
+      return { at: Date.parse(j.at) || Date.now(), fetched: Date.now(), works };
+    } catch (e) { last = e; }
+  }
+  throw last || new Error("目録を取得できませんでした");
+}
 async function loadCatalog(force = false) {
   if (catState.status === "loading") return;
   catState = { status: "loading", msg: "目録を読み込み中…" }; refreshBanner();
-  let cached = await idb.get("catalog");
-  if (force || !cached || Date.now() - cached.at > CATALOG_TTL) {
+  let cached = await idb.get("catalog2");
+  if (force || !cached || Date.now() - (cached.fetched || 0) > CATALOG_TTL) {
     try {
-      catState.msg = cached ? "目録を更新中…" : "青空文庫の目録をダウンロード中…（初回のみ・数MB）"; refreshBanner();
-      if (!window.JSZip) throw new Error("zipを開く部品を読み込めませんでした");
-      const { buf } = await fetchRepo(CATALOG_PATH);
-      const zip = await JSZip.loadAsync(buf);
-      const entry = Object.values(zip.files).find(f => /\.csv$/i.test(f.name));
-      if (!entry) throw new Error("目録ファイルが見つかりません");
-      const works = parseCatalog(await entry.async("string"));
-      if (works.length < 100) throw new Error("目録の形式を読み取れませんでした");
-      cached = { at: Date.now(), works };
-      await idb.set("catalog", cached);
+      catState.msg = cached ? "目録を更新中…" : "作品目録をダウンロード中…（初回のみ）"; refreshBanner();
+      cached = await fetchCatalog();
+      await idb.set("catalog2", cached);
     } catch (e) {
-      if (!cached) { catState = { status: "error", msg: e.message }; refreshBanner(); render(); return; }
-      toast("目録を更新できなかったため、保存済みの目録を使います");
+      if (!cached) {
+        catState = { status: "error", msg: `作品目録（catalog.json）がまだありません。GitHubのリポジトリで「Actions」→「目録を更新」を実行し、緑のチェックが付いてから再試行してください。（${e.message}）` };
+        refreshBanner(); render(); return;
+      }
+      if (force) toast("目録を更新できなかったため、保存済みの目録を使います");
     }
   }
   applyCatalog(cached.works);
@@ -204,15 +173,22 @@ function search(q, limit = 120) {
   return hits.sort((x, y) => y[0] - x[0] || (x[1].ty < y[1].ty ? -1 : 1)).slice(0, limit).map(h => h[1]);
 }
 const authorIdByName = name => (CAT.find(w => w.a === name) || {}).aid;
-function workOf(id) { return BY_ID[id] || (S.shelf[id] && { id, t: S.shelf[id].t, a: S.shelf[id].a, aid: "", ndc: "", kana: "", html: S.shelf[id].html || "" }) || null; }
+function workOf(id) { return BY_ID[id] || (S.shelf[id] && { id, t: S.shelf[id].t, a: S.shelf[id].a, aid: "", ndc: "", kana: "", txt: S.shelf[id].txt || "" }) || null; }
 
 /* ============================================================
    本文の取得と整形
    ============================================================ */
 const KANJI = "[々〆ヵヶ\\u3400-\\u9FFF\\uF900-\\uFAFF\\u{20000}-\\u{2FFFF}]";
+let GAIJI = null;
+async function ensureGaiji() {
+  if (GAIJI) return;
+  try { const r = await fetch("gaiji.json"); GAIJI = r.ok ? await r.json() : {}; } catch (e) { GAIJI = {}; }
+}
 function gaiji(desc) {
   const u = desc.match(/U\+([0-9A-Fa-f]{4,5})/);
   if (u) return String.fromCodePoint(parseInt(u[1], 16));
+  const j = desc.match(/第[34]水準([12]-\d{1,2}-\d{1,2})/);
+  if (j && GAIJI && GAIJI[j[1]]) return GAIJI[j[1]];
   return "〓";
 }
 /* HTMLのDOM → 青空文庫テキスト形式（ルビ・傍点・字下げ・外字画像を保つ） */
@@ -256,13 +232,41 @@ function parseAozoraHTML(html, base) {
   if (!main) throw new Error("本文が見つかりませんでした");
   return walkAozora(main, base).replace(/\n{3,}/g, "\n\n").replace(/^\n+|\s+$/g, "");
 }
+/* 青空文庫テキスト（.txt）：題名・著者・記号説明を外し、末尾の底本情報で切る */
+function parseAozoraTxt(text) {
+  const lines = text.replace(/\r/g, "").split("\n");
+  const dashes = lines.map((l, i) => /^-{20,}/.test(l) ? i : -1).filter(i => i >= 0);
+  let start = dashes.length >= 2 && dashes[1] < 60 ? dashes[1] + 1 : 0;
+  if (!start) { const blank = lines.findIndex((l, i) => i > 0 && !l.trim()); start = blank > 0 && blank < 6 ? blank + 1 : 0; }
+  let end = lines.findIndex((l, i) => i > start && /^底本：/.test(l));
+  if (end < 0) end = lines.length;
+  return lines.slice(start, end).join("\n").replace(/^\n+|\s+$/g, "");
+}
+async function fetchMirrorText(folder) {
+  const base = folder.split("/").pop();
+  let r = await fetch(`${MIRROR}${folder}/${base}.txt`);
+  if (r.ok) return r.arrayBuffer();
+  // ファイル名が zip 名と違う場合は、フォルダの中身を一覧して .txt を探す
+  const list = await fetch(MIRROR_API + folder);
+  if (!list.ok) throw new Error(list.status === 403 ? "本文の取得回数の上限に達しました。1時間ほど待ってからお試しください" : "本文ファイルが見つかりませんでした");
+  const files = await list.json();
+  const f = Array.isArray(files) && files.find(x => /\.txt$/i.test(x.name));
+  if (!f) throw new Error("本文ファイルが見つかりませんでした");
+  r = await fetch(f.download_url);
+  if (!r.ok) throw new Error("本文を取得できませんでした（HTTP " + r.status + "）");
+  return r.arrayBuffer();
+}
 async function loadText(w) {
   const cached = await idb.get("text:" + w.id);
   if (cached) return cached;
-  if (!w.html) throw new Error("この作品の本文ファイルの場所が分かりません");
-  const { buf, base } = await fetchRepo(w.html);
-  const src = parseAozoraHTML(decodeBytes(new Uint8Array(buf)), base + w.html);
-  const t = { src, at: Date.now() };
+  if (!w.txt) throw new Error("この作品の本文ファイルの場所が分かりません");
+  let buf;
+  try { buf = await fetchMirrorText(w.txt); }
+  catch (e) { throw new Error(e.message && !/fetch/i.test(e.message) ? e.message : "本文を取得できませんでした。通信状況を確かめてください"); }
+  const u8 = new Uint8Array(buf);
+  let text;
+  try { text = new TextDecoder("utf-8", { fatal: true }).decode(u8); } catch (e) { text = new TextDecoder("shift_jis").decode(u8); }
+  const t = { src: parseAozoraTxt(text), at: Date.now() };
   await idb.set("text:" + w.id, t);
   S.downloaded[w.id] = Date.now(); save();
   return t;
@@ -566,7 +570,7 @@ function viewSearch() {
   <div id="results">${searchResults()}</div>`;
 }
 function searchResults() {
-  if (catState.status !== "ready") return `<div class="empty"><b>目録を準備しています</b>初回は青空文庫の目録（数MB）をダウンロードします。</div>`;
+  if (catState.status !== "ready") return `<div class="empty"><b>目録を準備しています</b>初回は作品目録をダウンロードします。</div>`;
   if (!norm(searchQ)) {
     const authors = CLASSIC_AUTHORS.filter(a => authorIdByName(a));
     return `<h2 class="sec">作家から</h2><div class="chips">${authors.map(a => `<button class="chip" data-author="${esc(a)}">${esc(a)}</button>`).join("")}</div>
@@ -637,13 +641,13 @@ function viewSettings() {
   <div class="panel" style="display:flex;flex-direction:column;gap:10px">${styleControls(S.reader)}</div>
   <h2 class="sec">作品目録と保存データ</h2>
   <div class="panel" style="display:flex;flex-direction:column;gap:8px">
-    <div class="hint">目録 ${CAT.length.toLocaleString()}作品${catState.at ? `（${new Date(catState.at).toLocaleDateString("ja-JP")} 更新）` : ""}・保存済みの本文 ${Object.keys(S.downloaded).length}作品・本棚 ${Object.keys(S.shelf).length}冊・ことば ${S.phrases.length}件</div>
-    <div class="row" style="flex-wrap:wrap;gap:8px"><button class="btn small" data-act="reload-catalog">目録を今すぐ更新</button><button class="btn small" data-act="paste">本文を貼り付けて読む</button></div>
+    <div class="hint">目録 ${CAT.length.toLocaleString()}作品${catState.at ? `（${new Date(catState.at).toLocaleDateString("ja-JP")} 時点・毎週自動更新）` : ""}・保存済みの本文 ${Object.keys(S.downloaded).length}作品・本棚 ${Object.keys(S.shelf).length}冊・ことば ${S.phrases.length}件</div>
+    <div class="row" style="flex-wrap:wrap;gap:8px"><button class="btn small" data-act="reload-catalog">目録を読み込み直す</button><button class="btn small" data-act="paste">本文を貼り付けて読む</button></div>
     <div id="reset-area"><button class="btn small" data-act="reset-ask" style="color:var(--danger)">すべて消去する</button></div>
   </div>
   <h2 class="sec">ホーム画面に追加</h2>
   <div class="panel"><p style="margin:0">iPhoneのSafariで、共有ボタン →「ホーム画面に追加」を選ぶと、アプリとして起動できます。一度読んだ本文と目録は端末に保存されるので、通信がなくても読めます。</p></div>
-  <p class="hint" style="margin-top:18px">作品本文と目録は<a href="https://www.aozora.gr.jp/" target="_blank" rel="noopener">青空文庫</a>の公開データです。入力・校正に携わったボランティアの方々に感謝します。</p>`;
+  <p class="hint" style="margin-top:18px">作品本文と目録は<a href="https://www.aozora.gr.jp/" target="_blank" rel="noopener">青空文庫</a>の公開データです（本文は aozorahack のミラーから取得）。入力・校正に携わったボランティアの方々に感謝します。</p>`;
 }
 function styleControls(r) {
   const seg = (name, opts, cur) => `<div class="seg">${opts.map(([v, l]) => `<button data-style="${name}" data-val="${v}" aria-pressed="${String(cur) === String(v)}">${l}</button>`).join("")}</div>`;
@@ -830,13 +834,13 @@ async function openReader(id, jumpTo) {
   readingId = id;
   const s = ensureShelf(w, "reading");
   if (s.status === "want") s.status = "reading";
-  s.opened = Date.now(); if (w.html) s.html = w.html; save();
+  s.opened = Date.now(); if (w.txt) s.txt = w.txt; save();
   $("#r-title").textContent = w.t; $("#r-author").textContent = w.a;
   applyReaderStyle();
   $("#page").innerHTML = `<div class="r-loading"><div class="thinking">本文を読み込み中…</div></div>`;
   $("#reader").hidden = false; $("#reader").classList.remove("hide-chrome");
   let t;
-  try { t = await loadText(w); }
+  try { t = await loadText(w); if (/水準/.test(t.src)) await ensureGaiji(); }
   catch (e) {
     if (readingId !== id) return;
     $("#page").innerHTML = `<div class="r-loading"><p>${esc(e.message)}</p><div class="row" style="gap:8px;justify-content:center"><button class="btn" data-read="${id}">再試行</button><button class="btn" data-act="paste">貼り付けて読む</button></div></div>`;
@@ -1000,7 +1004,7 @@ async function submitPaste() {
   const r = parsePasted(pasteHTML, $("#paste-ta").value);
   const title = $("#paste-title").value.trim() || r.title || "無題", author = $("#paste-author").value.trim() || r.author || "作者不明";
   const found = CAT.find(w => norm(w.t) === norm(title) && norm(w.a) === norm(author));
-  const w = found || { id: "imp-" + hash(title + author), t: title, a: author, aid: "", ndc: "", kana: "", html: "" };
+  const w = found || { id: "imp-" + hash(title + author), t: title, a: author, aid: "", ndc: "", kana: "", txt: "" };
   await idb.set("text:" + w.id, { src: r.src, at: Date.now() });
   S.downloaded[w.id] = Date.now();
   ensureShelf(w, "reading"); save();

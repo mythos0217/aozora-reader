@@ -1,9 +1,8 @@
 // 青空リーダー Service Worker
 // アプリ本体だけをキャッシュしてオフラインでも起動できるようにする。
 // 目録と本文はアプリ側で IndexedDB に保存するので、ここでは扱わない。
-const VERSION = "v1";
-const SHELL = ["./", "./index.html", "./manifest.webmanifest", "./icons/apple-touch-icon.png", "./icons/icon-192.png", "./icons/icon-512.png",
-  "https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"];
+const VERSION = "v2";
+const SHELL = ["./", "./index.html", "./app.js", "./manifest.webmanifest", "./icons/apple-touch-icon.png", "./icons/icon-192.png", "./icons/icon-512.png", "./gaiji.json"];
 
 self.addEventListener("install", e => {
   e.waitUntil(caches.open(VERSION).then(c => c.addAll(SHELL)).then(() => self.skipWaiting()));
@@ -14,7 +13,7 @@ self.addEventListener("activate", e => {
 self.addEventListener("fetch", e => {
   const url = new URL(e.request.url);
   if (e.request.method !== "GET") return;
-  const isShell = url.origin === location.origin || url.hostname === "cdnjs.cloudflare.com" || url.hostname.endsWith("fonts.googleapis.com") || url.hostname.endsWith("fonts.gstatic.com");
+  const isShell = (url.origin === location.origin && !url.pathname.endsWith("catalog.json")) || url.hostname.endsWith("fonts.googleapis.com") || url.hostname.endsWith("fonts.gstatic.com");
   if (!isShell) return; // 青空文庫のデータやAIのAPIは素通し
   // 通信できればそれを使ってキャッシュを更新、できなければキャッシュ
   e.respondWith(

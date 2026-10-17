@@ -11,12 +11,16 @@ iPhoneのホーム画面から起動して使う、青空文庫の読書アプ�
 
 1. https://github.com でアカウントを作ってログインします。
 2. 右上の「＋」→「New repository」。名前を `aozora-reader` にし、**Public** を選んで「Create repository」。
-3. 作成したページの「uploading an existing file」をクリックし、このフォルダの中身をまとめてドラッグします。
-   `index.html` `app.js` `sw.js` `manifest.webmanifest` `icons` フォルダ（中身ごと）。
-   「Commit changes」を押します。
-4. リポジトリの「Settings」→ 左の「Pages」。
-   「Branch」を `main`、フォルダを `/ (root)` にして「Save」。
-5. 1〜2分待つと、同じ画面に `https://（ユーザー名）.github.io/aozora-reader/` が表示されます。これがアプリのURLです。
+3. 「uploading an existing file」をクリックし、このフォルダの中身をまとめてドラッグして「Commit changes」。
+   `index.html` `app.js` `sw.js` `manifest.webmanifest` `gaiji.json` `README.md` と `icons` フォルダ（中身ごと）。
+4. 作品目録を自動で作る設定を入れます（Macでは `.github` フォルダが見えないので、手で作ります）。
+   リポジトリのトップで「Add file」→「Create new file」。
+   ファイル名の欄に `.github/workflows/catalog.yml` と入力し（`/` を打つとフォルダになります）、
+   本文に `catalog.yml` の中身をすべて貼り付けて「Commit changes」。
+5. 上の「Actions」タブを開き、「目録を更新」に緑のチェックが付くまで1〜2分待ちます。
+   リポジトリに `catalog.json` が増えていれば成功です。以後は毎週月曜の朝に自動で更新されます。
+6. 「Settings」→ 左の「Pages」。「Branch」を `main`、フォルダを `/ (root)` にして「Save」。
+7. 1〜2分待つと `https://（ユーザー名）.github.io/aozora-reader/` が表示されます。これがアプリのURLです。
 
 ## iPhoneに入れる
 
@@ -40,7 +44,9 @@ GitHubのリポジトリに新しいファイルを同じ名前でアップロ�
 
 ## データの出どころ
 
-- 作品目録・本文：青空文庫がGitHubで公開しているデータ（aozorabunko/aozorabunko）
+- 作品目録：青空文庫の「公開中 作家別作品一覧拡充版」を、このリポジトリの GitHub Actions が毎週 catalog.json に変換
+- 本文：aozorahack が公開している青空文庫テキストのミラー（aozorahack/aozorabunko_text）
+- 外字：JIS X 0213 の第3・第4水準をUnicodeに置き換える対応表（gaiji.json）
 - 論文：J-STAGE WebAPI（CiNii ResearchはアプリIDを設定した場合）
 - 作品解説の下地：Wikipedia日本語版
 
