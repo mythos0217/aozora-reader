@@ -1,0 +1,67 @@
+# 青空文庫の作品目録を取得して catalog.json を作り、このリポジトリに保存する。
+# 毎週月曜の朝（日本時間）と、手動実行（Actions →「目録を更新」→ Run workflow）で動く。
+name: 目録を更新
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 21 * * 0"
+  push:
+    paths:
+      - .github/workflows/catalog.yml
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 青空文庫から目録をダウンロード
+        run: |
+          curl -fL --retry 3 \
+            -A "Mozilla/5.0 (aozora-reader catalog builder; +https://github.com/${GITHUB_REPOSITORY})" \
+            -o list.zip \
+            https://www.aozora.gr.jp/index_pages/list_person_all_extended_utf8.zip
+
+      - name: catalog.json に変換
+        shell: python
+        run: |
+          import csv, io, json, zipfile, datetime, re
+          z = zipfile.ZipFile("list.zip")
+          name = next(n for n in z.namelist() if n.lower().endswith(".csv"))
+          text = z.read(name).decode("utf-8-sig")
+          cols = ["id", "t", "ty", "st", "aid", "a", "ay", "ndc", "kana", "first", "pub", "card", "txt"]
+          rows, seen = [], set()
+          for r in csv.DictReader(io.StringIO(text)):
+              role = r.get("役割フラグ", "")
+              if role and role != "著者":
+                  continue
+              wid = r.get("作品ID", "")
+              if not wid or wid in seen:
+                  continue
+              m = re.match(r"https?://www\.aozora\.gr\.jp/(cards/\d+/files/[^/]+)\.zip$", r.get("テキストファイルURL", ""))
+              if not m:
+                  continue
+              seen.add(wid)
+              ndc = re.sub(r"\D", "", (r.get("分類番号", "").split(" ") or [""])[-1])
+              rows.append([wid, r["作品名"], r["作品名読み"], r.get("副題", ""), r["人物ID"],
+                           r["姓"] + r["名"], r["姓読み"] + r["名読み"], ndc, r.get("文字遣い種別", ""),
+                           r.get("初出", ""), r.get("公開日", ""), r.get("図書カードURL", ""), m.group(1)])
+          if len(rows) < 1000:
+              raise SystemExit(f"作品数が少なすぎます（{len(rows)}件）。目録の形式が変わった可能性があります")
+          out = {"at": datetime.date.today().isoformat(), "cols": cols, "rows": rows}
+          with open("catalog.json", "w", encoding="utf-8") as f:
+              json.dump(out, f, ensure_ascii=False, separators=(",", ":"))
+          print(f"{len(rows)} 作品")
+
+      - name: 保存
+        run: |
+          rm -f list.zip
+          git config user.name "github-actions[bot]"
+          git config user.email "41898299+github-actions[bot]@users.noreply.github.com"
+          git add catalog.json
+          git diff --cached --quiet || git commit -m "目録を更新"
+          git push
