@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
 <title>青空リーダー</title>
 <meta name="description" content="青空文庫を縦書きで読み、AIで語句の意味やあらすじを調べられる読書アプリ">
 <meta name="theme-color" content="#1F4E79">
@@ -217,6 +217,10 @@ textarea { min-height: 90px; resize: vertical; }
 
 /* ---- Webアプリ版の追加 ---- */
 [hidden] { display: none !important; }
+/* iPhone：入力欄が16px未満だと拡大されて画面がはみ出すので防ぐ／ページ全体は動かさず中だけスクロール */
+input, textarea, select { font-size: 16px !important; }
+html, body { overflow: hidden; width: 100%; }
+#view, .layer-body { overflow-x: hidden; overscroll-behavior: contain; }
 .tabs { position: relative; z-index: 15; }
 .layer-body { padding-bottom: calc(90px + env(safe-area-inset-bottom, 0px)); }
 *, *::before, *::after { box-sizing: border-box; }
