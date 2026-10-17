@@ -343,7 +343,7 @@ function parsePasted(html, text) {
 const PROVIDERS = {
   anthropic: { label: "Anthropic（Claude）", model: "claude-sonnet-5-5", keyUrl: "https://console.anthropic.com/settings/keys" },
   openai: { label: "OpenAI（GPT）", model: "gpt-5-mini", keyUrl: "https://platform.openai.com/api-keys" },
-  gemini: { label: "Google（Gemini）", model: "gemini-2.5-flash", keyUrl: "https://aistudio.google.com/apikey" },
+  gemini: { label: "Google（Gemini）", model: "gemini-3.6-flash", keyUrl: "https://aistudio.google.com/apikey" },
 };
 const aiReady = () => !!(S.aiKeys[S.aiProvider] || "").trim();
 const aiModel = () => (S.aiModels[S.aiProvider] || "").trim() || PROVIDERS[S.aiProvider].model;
@@ -364,7 +364,8 @@ async function callAI(prompt, { maxTokens = 2000, signal } = {}) {
   } else {
     url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`;
     headers["x-goog-api-key"] = key;
-    body = { systemInstruction: { parts: [{ text: AI_BASE }] }, contents: [{ role: "user", parts: [{ text: prompt }] }], generationConfig: { maxOutputTokens: maxTokens * 4 } };
+    // Gemini 3 系は内部で考える分も出力上限に数えるため、上限は指定しない
+    body = { systemInstruction: { parts: [{ text: AI_BASE }] }, contents: [{ role: "user", parts: [{ text: prompt }] }] };
   }
   let r;
   try { r = await fetch(url, { method: "POST", headers, body: JSON.stringify(body), signal }); }
@@ -376,10 +377,18 @@ async function callAI(prompt, { maxTokens = 2000, signal } = {}) {
   if (p === "anthropic") out = (j.content || []).filter(c => c.type === "text").map(c => c.text).join("");
   else if (p === "openai") out = j.choices?.[0]?.message?.content || "";
   else out = (j.candidates?.[0]?.content?.parts || []).map(x => x.text || "").join("");
-  if (!out.trim()) throw { code: "empty" };
+  if (!out.trim()) throw { code: "empty", detail: p === "gemini" ? (j.candidates?.[0]?.finishReason || j.promptFeedback?.blockReason || "") : "" };
   return out.trim();
 }
+function apiMessage(body) {
+  try { const j = JSON.parse(body); return (j.error && (j.error.message || j.error.type)) || j.message || ""; } catch (_) { return ""; }
+}
 function aiError(e) {
+  const m = aiErrorBase(e);
+  const d = e && (e.body ? apiMessage(e.body) : e.detail);
+  return m && d ? `${m}\n（${String(d).slice(0, 160)}）` : m;
+}
+function aiErrorBase(e) {
   if (!e) return "AIの呼び出しに失敗しました。";
   switch (e.code) {
     case "nokey": return "AIを使うには「設定」でAPIキーを登録してください。";
@@ -388,7 +397,8 @@ function aiError(e) {
     case "empty": return "AIから空の応答が返りました。もう一度お試しください。";
     case "http":
       if (e.status === 401 || e.status === 403) return "APIキーが無効か、権限がありません。設定を確かめてください。";
-      if (e.status === 404) return "モデル名が見つかりません。設定のモデル名を確かめてください。";
+      if (e.status === 404) return "このモデルは使えません。設定のモデル名を空欄にするか、別のモデル名を入れてください。";
+      if (e.status === 400) return "リクエストが受け付けられませんでした。APIキーとモデル名を確かめてください。";
       if (e.status === 429) return "利用上限かレート制限に達しました。少し待ってからお試しください。";
       return `AIの呼び出しに失敗しました（${e.status}）。`;
   }

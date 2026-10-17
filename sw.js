@@ -1,7 +1,7 @@
 // 青空リーダー Service Worker
 // アプリ本体だけをキャッシュしてオフラインでも起動できるようにする。
 // 目録と本文はアプリ側で IndexedDB に保存するので、ここでは扱わない。
-const VERSION = "v2";
+const VERSION = "v3";
 const SHELL = ["./", "./index.html", "./app.js", "./manifest.webmanifest", "./icons/apple-touch-icon.png", "./icons/icon-192.png", "./icons/icon-512.png", "./gaiji.json"];
 
 self.addEventListener("install", e => {
