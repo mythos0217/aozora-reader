@@ -238,6 +238,18 @@ body { margin: 0; -webkit-tap-highlight-color: transparent; }
 #reader[data-rtheme="dark"] #page img.gaiji { filter: invert(0.85); }
 a.item:hover .title { text-decoration: underline; }
 @media (min-width: 520px) { #app { height: calc(100dvh - 36px); } }
+
+/* ---- しおり ---- */
+#page .bm { position: relative; }
+#page .bm::before { content: ""; position: absolute; left: -15px; top: 0.35em; width: 9px; height: 16px; background: #B0413E; clip-path: polygon(0 0, 100% 0, 100% 100%, 50% 74%, 0 100%); }
+#reader[data-vertical="true"] #page .bm::before { left: auto; right: 0.25em; top: -1.35em; }
+.bm-item { display: grid; grid-template-columns: 1fr auto; gap: 6px 8px; align-items: center; padding: 10px 0; border-bottom: 1px solid var(--line); }
+.bm-item:last-child { border-bottom: 0; }
+.bm-go { grid-column: 1 / -1; text-align: left; background: none; border: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.bm-label { font-size: 13px; color: #B0413E; }
+.bm-ex { font-family: var(--serif); font-size: 15px; line-height: 1.6; }
+.bm-name { padding: 6px 10px !important; }
+.sheet-sec { margin: 6px 0 0; font-size: 13px; color: var(--muted); letter-spacing: .05em; }
 </style>
 </head>
 <body>
@@ -271,10 +283,11 @@ a.item:hover .title { text-decoration: underline; }
       <div class="row">
         <span id="r-pct" style="font-variant-numeric: tabular-nums">0%</span>
         <span class="spacer"></span>
+        <button class="btn small" data-act="bookmarks">しおり</button>
         <button class="btn small" data-act="summary">✦ あらすじ</button>
         <button class="btn small" data-act="finish" id="r-finish" hidden>読了にする</button>
       </div>
-      <div class="r-note" style="margin:0">文字を長押しで選ぶと「意味を調べる」「ことばを保存」。左右の端をタップでページ送り、中央で表示切替。</div>
+      <div class="r-note" style="margin:0">文字を長押しで選ぶと「意味を調べる」「ことばを保存」。左右の端をタップでページ送り、中央で表示切替。「しおり」で今の位置を何か所でも記録できます。</div>
     </div>
   </section>
 

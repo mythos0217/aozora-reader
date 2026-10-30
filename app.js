@@ -461,7 +461,7 @@ const listItem = (w, sub = "") => `<button class="item" data-open="${w.id}">${co
    画面
    ============================================================ */
 let tab = "home";
-function setTab(t) { tab = t; $("#detail").hidden = true; render(); $("#view").scrollTop = 0; }
+function setTab(t) { tab = t; $("#detail").hidden = true; detailId = null; remember(); render(); $("#view").scrollTop = 0; }
 function refreshBanner() {
   const b = $("#banner"); if (!b) return;
   if (catState.status === "loading") { b.hidden = false; b.innerHTML = `<div class="thinking">${esc(catState.msg)}</div>`; }
@@ -672,7 +672,7 @@ function styleControls(r) {
    作品ページ
    ============================================================ */
 let detailId = null, detailPane = "about", paperCache = {};
-function openDetail(id) { detailId = id; detailPane = "about"; renderDetail(); $("#detail").hidden = false; const b = $("#detail .layer-body"); if (b) b.scrollTop = 0; }
+function openDetail(id) { detailId = id; detailPane = "about"; renderDetail(); $("#detail").hidden = false; remember(); const b = $("#detail .layer-body"); if (b) b.scrollTop = 0; }
 function renderDetail() {
   const w = workOf(detailId); if (!w) return;
   const s = S.shelf[w.id];
@@ -693,6 +693,7 @@ function renderDetail() {
     if (s) h += `<div class="row" style="margin-bottom:12px"><span class="hint">あなたの評価</span><span class="stars">${[1, 2, 3, 4, 5].map(n => `<button data-rate="${n}" aria-label="${n}つ星">${n <= (s.rating || 0) ? "★" : "☆"}</button>`).join("")}</span><span class="spacer"></span>${s.progress > 0 ? `<span class="hint">${Math.round(s.progress * 100)}% 読了</span>` : ""}</div>`;
     h += `<dl class="kv">${w.ndc ? `<dt>分類</dt><dd>NDC ${esc(w.ndc)}（${esc(ndcLabel(w.ndc))}）</dd>` : ""}${w.kana ? `<dt>文字遣い</dt><dd>${esc(w.kana)}</dd>` : ""}${w.first ? `<dt>初出</dt><dd>${esc(w.first)}</dd>` : ""}${w.pub ? `<dt>青空文庫公開</dt><dd>${esc(w.pub)}</dd>` : ""}</dl>`;
     if (w.card) h += `<p style="margin:12px 0 0"><a href="${esc(w.card)}" target="_blank" rel="noopener">青空文庫の図書カードを開く</a></p>`;
+    if (bmList(w.id).length) h += `<h2 class="sec">しおり</h2><div class="panel" style="padding-top:4px;padding-bottom:4px">${bmItemsHTML(w.id, false)}</div>`;
     const phr = S.phrases.filter(p => p.workId === w.id);
     if (phr.length) h += `<h2 class="sec">この作品で保存したことば</h2>` + phr.map(p => `<div class="panel"><div class="quote">${esc(p.text)}</div></div>`).join("");
     if (others.length) h += `<h2 class="sec">${esc(w.a)}のほかの作品</h2><div class="hscroll">${others.slice(0, 30).map(x => bookCard(x)).join("")}</div>`;
@@ -841,7 +842,7 @@ function ratio() { const p = $("#page"), m = maxScroll(p); if (m <= 0) return 1;
 function restore(r) { const p = $("#page"), m = maxScroll(p); if (S.reader.vertical) p.scrollLeft = -r * m; else p.scrollTop = r * m; }
 async function openReader(id, jumpTo) {
   const w = workOf(id); if (!w) return;
-  readingId = id;
+  readingId = id; remember();
   const s = ensureShelf(w, "reading");
   if (s.status === "want") s.status = "reading";
   s.opened = Date.now(); if (w.txt) s.txt = w.txt; save();
@@ -859,8 +860,10 @@ async function openReader(id, jumpTo) {
   if (readingId !== id) return;
   plainCache = aozoraToPlain(t.src);
   $("#page").innerHTML = `<div class="w-head"><p class="w-title">${esc(w.t)}</p>${w.st ? `<p class="w-author">${esc(w.st)}</p>` : ""}<p class="w-author">${esc(w.a)}</p></div>${aozoraToHTML(t.src)}`;
-  requestAnimationFrame(() => { restore(jumpTo ?? (s.status === "finished" ? 0 : s.progress)); updateProgress(); });
-  setTimeout(() => { restore(jumpTo ?? (s.status === "finished" ? 0 : s.progress)); updateProgress(); }, 350);
+  const bm = jumpTo && typeof jumpTo === "object" ? bmList(id).find(b => b.id === jumpTo.bm) : null;
+  const pos = typeof jumpTo === "number" ? jumpTo : bm ? bm.pos : (s.status === "finished" ? 0 : s.progress);
+  const go = () => { if (readingId !== id) return; restore(pos); if (bm) jumpToPara(bm.idx); markBookmarks(); updateProgress(); };
+  requestAnimationFrame(go); setTimeout(go, 350);
 }
 function updateProgress() {
   if (!readingId || !plainCache) return;
@@ -870,7 +873,7 @@ function updateProgress() {
   $("#r-finish").hidden = !(r > 0.95 && s && s.status !== "finished");
   if (s && s.status !== "finished") { s.progress = r; clearTimeout(progressTimer); progressTimer = setTimeout(save, 500); }
 }
-function closeReader() { save(); readingId = null; plainCache = ""; $("#reader").hidden = true; $("#selbar").hidden = true; if (!$("#detail").hidden) renderDetail(); render(); }
+function closeReader() { keepProgress(); readingId = null; plainCache = ""; remember(); $("#reader").hidden = true; $("#selbar").hidden = true; if (!$("#detail").hidden) renderDetail(); render(); }
 
 function selectionInfo() {
   const sel = getSelection(); if (!sel || sel.isCollapsed || !sel.rangeCount) return null;
@@ -901,6 +904,84 @@ function savePhrase(sel, note = "") {
   S.phrases.unshift({ id: "p" + Date.now().toString(36), text: sel.text, context: sel.context, note, workId: w.id, title: w.t, author: w.a, pos: sel.pos, at: Date.now() });
   save(); toast("ことばを保存しました");
 }
+
+
+/* ============================================================
+   しおり（1冊に何本でも。段落の位置で覚えるので、文字の大きさを変えてもずれない）
+   ============================================================ */
+const bmList = id => ((S.bm ||= {})[id] ||= []);
+function markBookmarks() {
+  document.querySelectorAll("#page .bm").forEach(e => e.classList.remove("bm"));
+  if (!readingId) return;
+  for (const b of bmList(readingId)) { const el = paraEl(b.idx); if (el) el.classList.add("bm"); }
+}
+function addBookmark() {
+  if (!readingId || !plainCache) return;
+  const i = curIdx(), list = bmList(readingId);
+  if (list.some(b => b.idx === i)) { toast("この位置にはもうしおりがあります"); return; }
+  let ex = "", k = i;
+  while (!ex && k < i + 6) ex = paraText(k++);
+  list.push({ id: "m" + Date.now().toString(36), idx: i, pos: ratio(), ex: ex.slice(0, 60), name: "", at: Date.now() });
+  list.sort((a, b) => a.idx - b.idx);
+  save(); markBookmarks(); toast("しおりを挟みました");
+}
+function goBookmark(workId, bmId) {
+  const b = bmList(workId).find(x => x.id === bmId); if (!b) return;
+  if (readingId === workId && plainCache) { closeSheet(); if (!jumpToPara(b.idx)) restore(b.pos); updateProgress(); }
+  else openReader(workId, { bm: bmId });
+}
+function bmItemsHTML(workId, editable) {
+  const list = bmList(workId);
+  if (!list.length) return `<p class="hint" style="margin:4px 0">まだしおりはありません。</p>`;
+  return list.map(b => `<div class="bm-item">
+    <button class="bm-go" data-bmgo="${b.id}" data-bmwork="${esc(workId)}">
+      ${b.name ? `<b class="bm-label">${esc(b.name)}</b>` : ""}<span class="bm-ex">${esc(b.ex || "（しおり）")}…</span>
+      <span class="hint">${Math.round(b.pos * 100)}%・${new Date(b.at).toLocaleDateString("ja-JP")}</span>
+    </button>
+    ${editable ? `<input type="text" class="bm-name" data-bmname="${b.id}" value="${esc(b.name)}" placeholder="名前をつける（任意）" aria-label="しおりの名前">
+    <button class="btn small" data-bmdel="${b.id}" style="color:var(--danger)">外す</button>` : ""}
+  </div>`).join("");
+}
+function bookmarksSection() {
+  return `<button class="btn primary block" data-act="bm-add">＋ いまの位置にしおりを挟む</button>
+    <div id="bm-list">${bmItemsHTML(readingId, true)}</div>`;
+}
+
+const paras = () => [...$("#page").children].filter(e => e.tagName === "P");
+function curIdx() {
+  const page = $("#page"), r = page.getBoundingClientRect(), ps = paras();
+  for (let i = 0; i < ps.length; i++) {
+    const b = ps[i].getBoundingClientRect();
+    if (S.reader.vertical ? b.left < r.right - 30 : b.bottom > r.top + 30) return i;
+  }
+  return 0;
+}
+const paraEl = i => paras()[i];
+function paraText(i) {
+  const el = paraEl(i); if (!el) return "";
+  const c = el.cloneNode(true); c.querySelectorAll("rt,rp").forEach(x => x.remove());
+  return c.textContent.replace(/\s+/g, "").trim();
+}
+function jumpToPara(i) {
+  const el = paraEl(i); if (!el) return false;
+  const page = $("#page"), r = page.getBoundingClientRect(), b = el.getBoundingClientRect();
+  if (S.reader.vertical) page.scrollLeft += b.right - r.right + 30; else page.scrollTop += b.top - r.top - 24;
+  return true;
+}
+function openBookmarks() { openSheet("しおり", bookmarksSection()); }
+
+/* いまの画面と読書位置を記録 */
+function remember() {
+  S.last = readingId ? { v: "reader", id: readingId, tab, detail: detailId || null }
+    : detailId ? { v: "detail", id: detailId, tab } : { v: "tab", tab };
+  save();
+}
+function keepProgress() {
+  if (readingId && plainCache) { const s = S.shelf[readingId]; if (s && s.status !== "finished") s.progress = ratio(); }
+  clearTimeout(progressTimer); save();
+}
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden") keepProgress(); });
+window.addEventListener("pagehide", keepProgress);
 
 /* ============================================================
    シート
@@ -1063,14 +1144,18 @@ document.addEventListener("click", e => {
     return;
   }
   if (d.note) return openNote(d.note);
+  if (d.bmgo) return goBookmark(d.bmwork, d.bmgo);
+  if (d.bmdel) { const L = bmList(readingId || detailId); L.splice(L.findIndex(x => x.id === d.bmdel), 1); save(); markBookmarks(); const el = $("#bm-list"); if (el) el.innerHTML = bmItemsHTML(readingId || detailId, true); if (!$("#detail").hidden && !readingId) renderDetail(); return; }
   if (d.jump) { const p = S.phrases.find(x => x.id === d.jump); if (p) openReader(p.workId, p.pos); return; }
   if (d.delphrase) { S.phrases = S.phrases.filter(x => x.id !== d.delphrase); save(); return render(); }
   switch (d.act) {
-    case "close-detail": $("#detail").hidden = true; detailId = null; return render();
+    case "close-detail": $("#detail").hidden = true; detailId = null; remember(); return render();
     case "close-reader": return closeReader();
     case "close-sheet": return closeSheet();
     case "reader-style": return openStyleSheet();
     case "summary": if (plainCache) openSummary(); return;
+    case "bookmarks": if (plainCache) openBookmarks(); return;
+    case "bm-add": addBookmark(); { const el = $("#bm-list"); if (el) el.innerHTML = bmItemsHTML(readingId, true); } return;
     case "finish": { const s = S.shelf[readingId]; s.status = "finished"; s.progress = 1; save(); updateProgress(); toast("読了にしました"); if (!s.rating) openRate(); return; }
     case "sel-lookup": { const s = selectionInfo() || lastSel; if (s) lookup(s); return; }
     case "sel-save": { const s = selectionInfo() || lastSel; if (s) { savePhrase(s); getSelection().removeAllRanges(); } return; }
@@ -1103,6 +1188,10 @@ document.addEventListener("input", e => {
   const id = e.target.id;
   if (id === "q") { searchQ = e.target.value; clearTimeout(window._qt); window._qt = setTimeout(() => { $("#results").innerHTML = searchResults(); }, 200); }
   if (id === "pq") { phraseQ = e.target.value; const pos = e.target.selectionStart; render(); const el = $("#pq"); el.focus(); el.setSelectionRange(pos, pos); }
+  if (e.target.dataset && e.target.dataset.bmname) {
+    const w = readingId || detailId, b = bmList(w).find(x => x.id === e.target.dataset.bmname);
+    if (b) { b.name = e.target.value.slice(0, 40); save(); }
+  }
   if (id === "ai-key") { S.aiKeys[S.aiProvider] = e.target.value.trim(); save(); }
   if (id === "ai-model") { S.aiModels[S.aiProvider] = e.target.value.trim(); save(); }
   if (id === "cinii") { S.ciniiAppId = e.target.value.trim(); save(); }
@@ -1119,7 +1208,15 @@ document.addEventListener("keydown", e => {
 });
 
 /* 起動 */
+/* 前回開いていた画面に戻す（iPhoneでアプリが裏で終了・再読み込みされても、読んでいた位置から再開する） */
+const LAST = S.last || {};
+tab = LAST.tab || "home";
 render();
-loadCatalog();
+if (LAST.v === "reader" && LAST.id && workOf(LAST.id)) { if (LAST.detail && workOf(LAST.detail)) openDetail(LAST.detail); openReader(LAST.id); }
+loadCatalog().then(() => {
+  if (LAST.v === "detail" && LAST.id && !detailId && $("#reader").hidden && BY_ID[LAST.id]) openDetail(LAST.id);
+  else if (LAST.v === "reader" && LAST.detail && !detailId && BY_ID[LAST.detail]) { openDetail(LAST.detail); remember(); }
+  else if (detailId && !$("#detail").hidden) renderDetail();
+});
 if ("serviceWorker" in navigator && location.protocol === "https:") navigator.serviceWorker.register("sw.js").catch(() => {});
 if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
